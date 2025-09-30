@@ -23,6 +23,7 @@
 
   <div class="controls">
     <label><input type="checkbox" id="concertMode" /> Show concert pitch</label>
+    <label><input type="checkbox" id="allowFlams" /> Allow Flams (q, 8)</label>
     <label><input type="checkbox" id="allowOpenRolls" checked /> Allow Open Rolls (h, w)</label>
     <label><input type="checkbox" id="allowClosedRolls" checked /> Allow Closed Rolls (h, w)</label>
     <button id="shuffleBtn" onclick="drawRandom()">Shuffle (or press Space)</button>
@@ -32,12 +33,12 @@
     <div>
       <div class="label">Trumpet (Bb) — Written</div>
       <div id="trebleBb" class="staff"></div>
-      <div class="note-hint">Range: C4 to C5 (low C to C in the staff)</div>
+      <div class="note-hint">Range: C4 to C5 (naturals)</div>
     </div>
     <div>
       <div class="label">Alto Sax (Eb) — Written</div>
       <div id="trebleEb" class="staff"></div>
-      <div class="note-hint">Range: G4 to G5 (G in the staff to G above)</div>
+      <div class="note-hint">Range: G4 to G5 (naturals + F#)</div>
     </div>
   </div>
 
@@ -45,12 +46,12 @@
     <div>
       <div class="label">Bass (Concert)</div>
       <div id="bass" class="staff"></div>
-      <div class="note-hint">Range: Bb2 to Bb3 (in the staff to above)</div>
+      <div class="note-hint">Range: Bb2 to Bb3 (naturals + Bb)</div>
     </div>
     <div>
       <div class="label">Percussion</div>
       <div id="perc" class="staff"></div>
-      <div class="note-hint">Rolls only on half & whole notes (open or closed). Others are plain.</div>
+      <div class="note-hint">Rolls only on half & whole; flams (if enabled) only on q/8; no triplets.</div>
     </div>
   </div>
 
@@ -68,7 +69,7 @@
     function midiToKeyPreferClass(midi) {
       const pc = ((midi % 12) + 12) % 12;
       const oct = Math.floor(midi / 12) - 1;
-      // Prefer beginner-friendly spellings: sharps for 1,6,8; flats for 3,10
+      // Beginner-friendly spellings
       const pref = {
         0:{letter:"c",acc:""}, 1:{letter:"c",acc:"#"}, 2:{letter:"d",acc:""},
         3:{letter:"e",acc:"b"}, 4:{letter:"e",acc:""}, 5:{letter:"f",acc:""},
@@ -86,44 +87,53 @@
     function randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
 
     // ---------- Beginner ranges (written) ----------
-    // Trumpet (Bb treble): C4..C5
+    // Trumpet (Bb treble): C4..C5 (naturals only)
     const TRUMPET_MIN = midiFrom("c","",4);
     const TRUMPET_MAX = midiFrom("c","",5);
-    // Alto Sax (Eb treble): G4..G5
+    // Alto Sax (Eb treble): G4..G5 (naturals + F#)
     const ALTO_MIN = midiFrom("g","",4);
     const ALTO_MAX = midiFrom("g","",5);
-    // Bass (concert): Bb2..Bb3
+    // Bass (concert): Bb2..Bb3 (naturals + Bb)
     const BASS_MIN = midiFrom("b","b",2);
     const BASS_MAX = midiFrom("b","b",3);
 
-    // Build random pools (naturals only for beginners)
-    const lettersNat = ["c","d","e","f","g","a","b"];
-    function buildPool(minMidi, maxMidi) {
+    // Helper to build note pools
+    function buildPool(minMidi, maxMidi, extras = []) {
       const pool = [];
       for (let m = minMidi; m <= maxMidi; m++) {
         const k = midiToKeyPreferClass(m);
-        // Ensure only naturals within the ranges (beginner-friendly)
-        if (k.acc === "") pool.push(m);
+        if (k.acc === "") pool.push(m); // naturals only
       }
+      // Add explicit extras
+      for (const e of extras) pool.push(midiFrom(e.letter, e.acc, e.oct));
       return pool;
     }
-    const POOL_TRUMPET = buildPool(TRUMPET_MIN, TRUMPET_MAX);
-    const POOL_ALTO    = buildPool(ALTO_MIN, ALTO_MAX);
-    const POOL_BASS    = buildPool(BASS_MIN, BASS_MAX);
 
-    // ---------- Percussion rhythms ----------
+    // Pools (with requested extras)
+    const POOL_TRUMPET = buildPool(TRUMPET_MIN, TRUMPET_MAX);
+    const POOL_ALTO    = buildPool(ALTO_MIN, ALTO_MAX, [
+      { letter:"f", acc:"#", oct:4 },  // F#4
+      { letter:"f", acc:"#", oct:5 }   // F#5
+    ]);
+    const POOL_BASS    = buildPool(BASS_MIN, BASS_MAX, [
+      { letter:"b", acc:"b", oct:2 },  // Bb2
+      { letter:"b", acc:"b", oct:3 }   // Bb3
+    ]);
+
+    // ---------- Percussion rhythms (NO TRIPLETS) ----------
     const rhythms = [
       { label: "Whole",   duration: "w",  count: 1 },
       { label: "Half",    duration: "h",  count: 2 },
       { label: "Quarter", duration: "q",  count: 4 },
       { label: "Eighth",  duration: "8",  count: 8 },
-      { label: "16th",    duration: "16", count: 16 },
-      { label: "Triplet 8ths", duration: "8", count: 12, triplet: true }
+      { label: "16th",    duration: "16", count: 16 }
+      // Triplets removed for beginner
     ];
 
-    // Rolls only on half/whole
-    const PROB_OPEN_ROLL = 0.25;   // h, w
-    const PROB_CLOSED_ROLL = 0.25; // h, w
+    // Rolls only on half/whole; Flams (if enabled) only on quarters/eighths
+    const PROB_OPEN_ROLL = 0.25;
+    const PROB_CLOSED_ROLL = 0.25;
+    const PROB_FLAM = 0.30;
 
     // ---------- Draw helpers ----------
     function clearDiv(id){ const el = document.getElementById(id); if (el) el.innerHTML = ""; }
@@ -151,45 +161,47 @@
       v.draw(ctx, stave);
     }
 
-    // ---------- Percussion (rolls only on half/whole) ----------
+    // ---------- Percussion (rolls only h/w; flams q/8 when enabled) ----------
     function makePercNote(duration){ return new VF.StaveNote({ clef:"percussion", keys:["b/4"], duration, stem_direction:1 }); }
     function addOpenRoll(n){ n.addModifier(0, new VF.Tremolo(2)); }
     function addClosedRoll(n){ n.addModifier(0, new VF.Tremolo(3)); }
+    function addFlam(n){
+      const g = new VF.GraceNote({ keys:["b/4"], duration:"8", slash:false, stem_direction:1 });
+      const gg = new VF.GraceNoteGroup([g], { slur:true });
+      n.addModifier(0, gg);
+    }
 
-    function drawPerc(rhythm, allowOpen, allowClosed){
+    function drawPerc(rhythm, allowFlams, allowOpen, allowClosed){
       clearDiv("perc");
       const { ctx, stave, width } = makeStave("perc","percussion");
-      let notes = [], beams=[], tuplets=[], tie=null;
+      let notes = [], beams=[];
 
       if (rhythm.duration === "w") {
-        // Optionally render as two tied halves if we add closed roll (looks cleaner)
-        const n1 = makePercNote("h"), n2 = makePercNote("h");
-        if (allowClosed && Math.random() < PROB_CLOSED_ROLL) { addClosedRoll(n1); addClosedRoll(n2); }
-        // Open roll also allowed on whole — apply if chosen (but not both)
-        else if (allowOpen && Math.random() < PROB_OPEN_ROLL) { addOpenRoll(n1); addOpenRoll(n2); }
-        notes = [n1, n2];
-        tie = new VF.StaveTie({ first_note:n1, last_note:n2, first_indices:[0], last_indices:[0] });
+        // Single whole note; apply open/closed roll if chosen
+        const n = makePercNote("w");
+        const r = Math.random();
+        if (allowClosed && r < PROB_CLOSED_ROLL) addClosedRoll(n);
+        else if (allowOpen && r < PROB_CLOSED_ROLL + PROB_OPEN_ROLL) addOpenRoll(n);
+        notes = [n];
       } else {
-        for (let i=0;i<rhythm.count;i++) notes.push(makePercNote(rhythm.duration));
-
-        if (rhythm.triplet) {
-          for (let i=0;i<notes.length;i+=3){
-            const g = notes.slice(i, i+3);
-            if (g.length===3) tuplets.push(new VF.Tuplet(g,{ num_notes:3, notes_occupied:2 }));
+        for (let i=0;i<rhythm.count;i++) {
+          const n = makePercNote(rhythm.duration);
+          // Flams only on q/8 when enabled
+          if (allowFlams && (rhythm.duration === "q" || rhythm.duration === "8") && Math.random() < PROB_FLAM) {
+            addFlam(n);
           }
-        }
-        if (rhythm.duration==="8" || rhythm.duration==="16") {
-          beams = VF.Beam.generateBeams(notes);
-        }
-
-        // Rolls only on HALF (quarters/eighths/16ths remain plain)
-        if (rhythm.duration === "h") {
-          for (const n of notes) {
-            // Choose one type at most
+          // Rolls only on HALF (quarters/eighths/16ths remain plain)
+          if (rhythm.duration === "h") {
             const r = Math.random();
             if (allowClosed && r < PROB_CLOSED_ROLL) addClosedRoll(n);
             else if (allowOpen && r < PROB_CLOSED_ROLL + PROB_OPEN_ROLL) addOpenRoll(n);
           }
+          notes.push(n);
+        }
+
+        // Beams for 8ths/16ths
+        if (rhythm.duration==="8" || rhythm.duration==="16") {
+          beams = VF.Beam.generateBeams(notes);
         }
       }
 
@@ -198,38 +210,36 @@
       new VF.Formatter().joinVoices([v]).format([v], width-60);
       v.draw(ctx, stave);
       beams.forEach(b=>b.setContext(ctx).draw());
-      tuplets.forEach(t=>t.setContext(ctx).draw());
-      if (tie) tie.setContext(ctx).draw();
     }
 
     // ---------- Main ----------
     function drawRandom(){
       const concertMode = document.getElementById("concertMode").checked;
+      const allowFlams = document.getElementById("allowFlams").checked;
       const allowOpen = document.getElementById("allowOpenRolls").checked;
       const allowClosed = document.getElementById("allowClosedRolls").checked;
 
-      // Pick written notes in the specified beginner ranges (naturals only)
-      const tMidi = POOL_TRUMPET[randInt(0, POOL_TRUMPET.length-1)]; // written Bb treble
-      const aMidi = POOL_ALTO[randInt(0, POOL_ALTO.length-1)];       // written Eb treble
-      const bMidi = POOL_BASS[randInt(0, POOL_BASS.length-1)];       // concert bass
+      // Pick written notes in the specified beginner ranges
+      const tMidi = POOL_TRUMPET[randInt(0, POOL_TRUMPET.length-1)];
+      const aMidi = POOL_ALTO[randInt(0, POOL_ALTO.length-1)];
+      const bMidi = POOL_BASS[randInt(0, POOL_BASS.length-1)];
 
       // Convert to displayed keys
-      // If concert mode: convert the Bb/Eb written to CONCERT midi first
       const trumpetDisplayMidi = concertMode ? (tMidi - 2) : tMidi;  // Bb → concert
       const altoDisplayMidi    = concertMode ? (aMidi - 9) : aMidi;  // Eb → concert
 
       const tKey = midiToKeyPreferClass(trumpetDisplayMidi);
       const aKey = midiToKeyPreferClass(altoDisplayMidi);
-      const bKey = midiToKeyPreferClass(bMidi); // bass is already concert
+      const bKey = midiToKeyPreferClass(bMidi); // bass is concert
 
-      // Draw
+      // Draw winds
       drawWholeAt("trebleBb","treble", tKey);
       drawWholeAt("trebleEb","treble", aKey);
       drawWholeAt("bass","bass", bKey);
 
-      // Percussion rhythm & rolls (only on half & whole)
+      // Percussion rhythm & ornaments
       const rhythm = rhythms[randInt(0, rhythms.length-1)];
-      drawPerc(rhythm, allowOpen, allowClosed);
+      drawPerc(rhythm, allowFlams, allowOpen, allowClosed);
     }
 
     // Init + controls
@@ -237,6 +247,7 @@
     document.addEventListener("keydown", (ev)=>{ if (ev.code==="Space"){ev.preventDefault(); drawRandom();} });
     document.getElementById("shuffleBtn").addEventListener("click", drawRandom);
     document.getElementById("concertMode").addEventListener("change", drawRandom);
+    document.getElementById("allowFlams").addEventListener("change", drawRandom);
     document.getElementById("allowOpenRolls").addEventListener("change", drawRandom);
     document.getElementById("allowClosedRolls").addEventListener("change", drawRandom);
   </script>
