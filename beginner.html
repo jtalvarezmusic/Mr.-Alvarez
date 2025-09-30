@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Beginner Band Randomizer — Concert-Matched (Trumpet, Alto, Bass)</title>
+  <title>Beginner Band — Concert Bb Scale (Matched)</title>
   <!-- VexFlow v3 UMD -->
   <script src="https://unpkg.com/vexflow@3.0.9/releases/vexflow-min.js"></script>
   <style>
@@ -19,7 +19,7 @@
   </style>
 </head>
 <body>
-  <h1>Beginner Band Randomizer (Concert-Matched)</h1>
+  <h1>Beginner Band — Concert Bb Scale (Matched)</h1>
 
   <div class="controls">
     <label><input type="checkbox" id="concertMode" /> Show concert pitch on treble staves</label>
@@ -38,15 +38,15 @@
     <div>
       <div class="label">Alto Sax (Eb) — Written</div>
       <div id="trebleEb" class="staff"></div>
-      <div class="note-hint">Display range: G4–G5 (includes optional F#)</div>
+      <div class="note-hint">Display range: G4–G5</div>
     </div>
   </div>
 
   <div class="row">
     <div>
-      <div class="label">Bass (Concert)</div>
+      <div class="label">Bass (Concert) — Bb Scale Only</div>
       <div id="bass" class="staff"></div>
-      <div class="note-hint">Concert range source: Bb2–Bb3 (naturals + Bb)</div>
+      <div class="note-hint">Pool: Bb2 · C3 · D3 · Eb3 · F3 · G3 · A3 · Bb3</div>
     </div>
     <div>
       <div class="label">Percussion</div>
@@ -69,7 +69,7 @@
     function midiToKeyPreferClass(midi) {
       const pc = ((midi % 12) + 12) % 12;
       const oct = Math.floor(midi / 12) - 1;
-      // Beginner-friendly spellings (and aligned with earlier choices)
+      // Prefer Bb/Eb spellings for scale correctness
       const pref = {
         0:{letter:"c",acc:""}, 1:{letter:"c",acc:"#"}, 2:{letter:"d",acc:""},
         3:{letter:"e",acc:"b"}, 4:{letter:"e",acc:""}, 5:{letter:"f",acc:""},
@@ -87,29 +87,22 @@
     function randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
 
     // ---------- Display ranges ----------
-    // Treble written display windows
     const TRUMPET_MIN = midiFrom("c","",4); // C4
     const TRUMPET_MAX = midiFrom("c","",5); // C5
     const ALTO_MIN    = midiFrom("g","",4); // G4
     const ALTO_MAX    = midiFrom("g","",5); // G5
-    // Bass concert pool range
-    const BASS_MIN    = midiFrom("b","b",2); // Bb2
-    const BASS_MAX    = midiFrom("b","b",3); // Bb3
 
-    // Build a concert pool: naturals in Bb2..Bb3 + ensure Bb2 & Bb3 present
-    function buildConcertPool() {
-      const pool = [];
-      for (let m = BASS_MIN; m <= BASS_MAX; m++) {
-        const k = midiToKeyPreferClass(m);
-        if (k.acc === "") pool.push(m); // naturals
-      }
-      // Ensure Bb2 & Bb3 included
-      pool.push(midiFrom("b","b",2));
-      pool.push(midiFrom("b","b",3));
-      // Deduplicate
-      return [...new Set(pool)];
-    }
-    const CONCERT_POOL = buildConcertPool();
+    // ---------- Concert Bb scale pool in bass range (Bb2..Bb3) ----------
+    const CONCERT_SCALE_POOL = [
+      midiFrom("b","b",2), // Bb2
+      midiFrom("c","",3),  // C3
+      midiFrom("d","",3),  // D3
+      midiFrom("e","b",3), // Eb3
+      midiFrom("f","",3),  // F3
+      midiFrom("g","",3),  // G3
+      midiFrom("a","",3),  // A3
+      midiFrom("b","b",3)  // Bb3
+    ];
 
     // ---------- Percussion rhythms (NO TRIPLETS) ----------
     const rhythms = [
@@ -201,31 +194,31 @@
       beams.forEach(b=>b.setContext(ctx).draw());
     }
 
-    // ---------- Main (concert-first) ----------
+    // ---------- Main (concert-first, Bb scale only) ----------
     function drawRandom(){
       const concertMode = document.getElementById("concertMode").checked;
       const allowFlams = document.getElementById("allowFlams").checked;
-      const allowOpen = document.getElementById("allowOpenRolls").checked;
+      const allowOpen   = document.getElementById("allowOpenRolls").checked;
       const allowClosed = document.getElementById("allowClosedRolls").checked;
 
-      // 1) Pick one concert pitch (Bb2..Bb3, naturals + Bb)
-      const concertMidiRaw = CONCERT_POOL[randInt(0, CONCERT_POOL.length-1)];
+      // 1) Pick one concert pitch ONLY from the Bb scale pool (Bb2..Bb3)
+      const concertMidi = CONCERT_SCALE_POOL[randInt(0, CONCERT_SCALE_POOL.length-1)];
 
       // 2) Build treble displays
-      let tMidiWritten = concertMidiRaw + 2;  // Bb treble written = concert + M2
-      let aMidiWritten = concertMidiRaw + 9;  // Eb treble written = concert + M6 (9 semitones)
+      let tMidiWritten = concertMidi + 2;  // Bb treble written = concert + M2
+      let aMidiWritten = concertMidi + 9;  // Eb treble written = concert + M6
 
-      // Clamp written displays to their visual ranges (keeps pitch class; just changes octave)
+      // Clamp written to display windows (keeps pitch class, adjusts octave)
       tMidiWritten = clampByOctave(tMidiWritten, TRUMPET_MIN, TRUMPET_MAX);
       aMidiWritten = clampByOctave(aMidiWritten, ALTO_MIN, ALTO_MAX);
 
-      // If concertMode is ON, show concert on treble staves too (octave-clamped to fit their staff windows)
-      const tMidiDisplay = concertMode ? clampByOctave(concertMidiRaw, TRUMPET_MIN, TRUMPET_MAX) : tMidiWritten;
-      const aMidiDisplay = concertMode ? clampByOctave(concertMidiRaw, ALTO_MIN, ALTO_MAX)     : aMidiWritten;
+      // If concertMode is ON, show concert note on treble staves too (octave-clamped)
+      const tMidiDisplay = concertMode ? clampByOctave(concertMidi, TRUMPET_MIN, TRUMPET_MAX) : tMidiWritten;
+      const aMidiDisplay = concertMode ? clampByOctave(concertMidi, ALTO_MIN, ALTO_MAX)     : aMidiWritten;
 
       const tKey = midiToKeyPreferClass(tMidiDisplay);
       const aKey = midiToKeyPreferClass(aMidiDisplay);
-      const bKey = midiToKeyPreferClass(concertMidiRaw); // bass shows the actual concert note
+      const bKey = midiToKeyPreferClass(concertMidi); // bass shows the exact concert note (Bb scale)
 
       // 3) Draw winds
       drawWholeAt("trebleBb","treble", tKey);
