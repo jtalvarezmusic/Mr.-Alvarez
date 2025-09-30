@@ -47,7 +47,7 @@
     <div>
       <div class="label">Percussion</div>
       <div id="perc" class="staff"></div>
-      <div class="note-hint">Flams: q/8 · Open rolls: q/h · Closed rolls: h/w · Triplet 8ths are plain</div>
+      <div class="note-hint">Flams: q/8 · Open rolls: q/h (3 slashes) · Closed rolls: h/w (z) · Triplet 8ths are plain</div>
     </div>
   </div>
 
@@ -123,8 +123,8 @@
 
     // Rudiment chances
     const PROB_FLAM = 0.30;        // quarters, eighths
-    const PROB_OPEN_ROLL = 0.25;   // quarters, halves
-    const PROB_CLOSED_ROLL = 0.25; // halves, wholes
+    const PROB_OPEN_ROLL = 0.25;   // quarters, halves (3 slashes)
+    const PROB_CLOSED_ROLL = 0.25; // halves, wholes (z)
 
     // ---------- Drawing helpers ----------
     function clearDiv(id) { const el = document.getElementById(id); if (el) el.innerHTML = ""; }
@@ -165,8 +165,20 @@
       const gg = new VF.GraceNoteGroup([g], { slur: true });
       note.addModifier(0, gg);
     }
-    function addOpenRoll(note) { note.addModifier(0, new VF.Tremolo(2)); }   // 2 slashes
-    function addClosedRoll(note) { note.addModifier(0, new VF.Tremolo(3)); } // 3 slashes
+
+    // OPEN roll = 3 slashes (tremolo with 3)
+    function addOpenRoll(note) {
+      note.addModifier(0, new VF.Tremolo(3));
+    }
+
+    // CLOSED roll = big centered "z" on the note (no slashes)
+    function addClosedRoll(note) {
+      const z = new VF.Annotation("z")
+        .setFont("Arial", 18, "bold")
+        .setJustification(VF.Annotation.Justify.CENTER)
+        .setVerticalJustification(VF.Annotation.VerticalJustify.CENTER);
+      note.addModifier(0, z);
+    }
 
     function applyRudimentsToNotes(notes, rhythm, allowFlams, allowOpenRolls, allowClosedRolls) {
       for (const n of notes) {
@@ -176,14 +188,14 @@
         // Flams: quarters & eighths
         if (allowFlams && (dur === "q" || dur === "8") && chance(PROB_FLAM)) {
           addFlam(n);
-          continue; // flam chosen → skip roll
+          continue; // flam chosen → skip roll on this note
         }
-        // Open rolls: quarters & halves
+        // Open rolls: quarters & halves — 3 slashes
         if (allowOpenRolls && (dur === "q" || dur === "h") && chance(PROB_OPEN_ROLL)) {
           addOpenRoll(n);
           continue;
         }
-        // Closed rolls: halves
+        // Closed rolls: halves — "z"
         if (allowClosedRolls && dur === "h" && chance(PROB_CLOSED_ROLL)) {
           addClosedRoll(n);
           continue;
@@ -199,20 +211,17 @@
       let notes = [];
       let beams = [];
       let tuplets = [];
-      let tie = null;
 
       if (rhythm.duration === "w") {
-        // === UPDATED: single whole note (no tied halves) ===
+        // Single whole note; apply closed (z) or open (3 slashes) if chosen
         const n = makePercNote("w");
-        // Apply roll if chosen (flams are not applied to whole notes)
         const r = Math.random();
         if (allowClosedRolls && r < PROB_CLOSED_ROLL) {
-          addClosedRoll(n);
+          addClosedRoll(n); // z
         } else if (allowOpenRolls && r < PROB_CLOSED_ROLL + PROB_OPEN_ROLL) {
-          addOpenRoll(n);
+          addOpenRoll(n);   // 3 slashes
         }
         notes = [n];
-        // (no tie)
       } else {
         // Build repeated notes
         for (let i = 0; i < rhythm.count; i++) notes.push(makePercNote(rhythm.duration));
@@ -243,7 +252,6 @@
 
       beams.forEach(b => b.setContext(context).draw());
       tuplets.forEach(t => t.setContext(context).draw());
-      // (no tie for whole note now)
     }
 
     // ---------- Main randomizer with Bb-treble option ----------
