@@ -72,24 +72,20 @@
       return 12 * (oct + 1) + base;
     }
     function midiToKeyPreferClass(midi) {
-      // Convert MIDI -> {letter, acc, oct} using preferences that match your allowed set
       const pc = ((midi % 12) + 12) % 12;
       const oct = Math.floor(midi / 12) - 1;
-
-      // Preferred spellings (aim to match allowed set)
-      // 0 C, 1 C#/Db, 2 D, 3 Eb, 4 E, 5 F, 6 F#, 7 G, 8 G#, 9 A, 10 Bb, 11 B
       const pref = {
         0: { letter:"c", acc:"" },
-        1: { letter:"c", acc:"#"},      // prefer C# over Db (both in set)
+        1: { letter:"c", acc:"#"},
         2: { letter:"d", acc:"" },
-        3: { letter:"e", acc:"b"},      // prefer Eb
+        3: { letter:"e", acc:"b"},
         4: { letter:"e", acc:"" },
         5: { letter:"f", acc:"" },
-        6: { letter:"f", acc:"#"},      // F#
+        6: { letter:"f", acc:"#"},
         7: { letter:"g", acc:"" },
-        8: { letter:"g", acc:"#"},      // G#
+        8: { letter:"g", acc:"#"},
         9: { letter:"a", acc:"" },
-        10:{ letter:"b", acc:"b"},      // Bb
+        10:{ letter:"b", acc:"b"},
         11:{ letter:"b", acc:"" }
       };
       const { letter, acc } = pref[pc];
@@ -97,7 +93,6 @@
     }
 
     function clampToBassRange(midi) {
-      // Clamp concert MIDI into A2..C4 (inclusive bounds)
       const A2 = 12*(2+1)+9;  // 45
       const C4 = 12*(4+1)+0;  // 60
       while (midi < A2) midi += 12;
@@ -207,12 +202,17 @@
       let tie = null;
 
       if (rhythm.duration === "w") {
-        // Whole → if closed rolls allowed, render as two tied halves with slashes
-        const n1 = makePercNote("h");
-        const n2 = makePercNote("h");
-        if (allowClosedRolls && chance(PROB_CLOSED_ROLL)) { addClosedRoll(n1); addClosedRoll(n2); }
-        notes = [n1, n2];
-        tie = new VF.StaveTie({ first_note: n1, last_note: n2, first_indices: [0], last_indices: [0] });
+        // === UPDATED: single whole note (no tied halves) ===
+        const n = makePercNote("w");
+        // Apply roll if chosen (flams are not applied to whole notes)
+        const r = Math.random();
+        if (allowClosedRolls && r < PROB_CLOSED_ROLL) {
+          addClosedRoll(n);
+        } else if (allowOpenRolls && r < PROB_CLOSED_ROLL + PROB_OPEN_ROLL) {
+          addOpenRoll(n);
+        }
+        notes = [n];
+        // (no tie)
       } else {
         // Build repeated notes
         for (let i = 0; i < rhythm.count; i++) notes.push(makePercNote(rhythm.duration));
@@ -243,7 +243,7 @@
 
       beams.forEach(b => b.setContext(context).draw());
       tuplets.forEach(t => t.setContext(context).draw());
-      if (tie) tie.setContext(context).draw();
+      // (no tie for whole note now)
     }
 
     // ---------- Main randomizer with Bb-treble option ----------
@@ -264,8 +264,6 @@
       const { letter, acc, oct, midi: writtenMidi } = choice;
 
       // Determine concert MIDI:
-      // - If Bb treble: concert = written - 2 semitones
-      // - Else: concert = written (no transposition)
       let concertMidi = bbTreble ? (writtenMidi - 2) : writtenMidi;
 
       // For bass display, clamp concert MIDI into A2..C4 by octave shifts
@@ -273,17 +271,14 @@
       const bassKey = midiToKeyPreferClass(bassMidi);
 
       if (!percOnly) {
-        // Treble display:
-        // - If Bb treble ON -> show the WRITTEN (letter/acc/oct) we picked
-        // - If OFF -> show CONCERT (convert concertMidi back to treble key)
+        // Treble display
         if (bbTreble) {
           drawSingleWholeKey("treble", "treble", letter, acc, oct, windWidth);
         } else {
           const tKey = midiToKeyPreferClass(concertMidi);
           drawSingleWholeKey("treble", "treble", tKey.letter, tKey.acc, tKey.oct, windWidth);
         }
-
-        // Bass (always show concert, clamped to A2–C4)
+        // Bass (concert)
         drawSingleWholeKey("bass", "bass", bassKey.letter, bassKey.acc, bassKey.oct, windWidth);
       } else {
         clearDiv("treble"); clearDiv("bass");
