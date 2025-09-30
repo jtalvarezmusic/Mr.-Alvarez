@@ -26,8 +26,8 @@
   <div class="controls">
     <label><input type="checkbox" id="bbTreble" /> Treble is Bb (Trumpet/Clarinet)</label>
     <label><input type="checkbox" id="allowFlams" checked /> Allow Flams (q, 8)</label>
-    <label><input type="checkbox" id="allowOpenRolls" checked /> Allow Open Rolls (q, h) (3 slashes)</label>
-    <label><input type="checkbox" id="allowClosedRolls" checked /> Allow Closed Rolls (h, w) (“Z” on stem)</label>
+    <label><input type="checkbox" id="allowOpenRolls" checked /> Allow Open Rolls (q, h)</label>
+    <label><input type="checkbox" id="allowClosedRolls" checked /> Allow Closed Rolls (h, w)</label>
     <label><input type="checkbox" id="percOnly" /> Percussion only</label>
     <button id="shuffleBtn" onclick="drawRandom()">Shuffle (or press Space)</button>
   </div>
@@ -47,7 +47,7 @@
     <div>
       <div class="label">Percussion</div>
       <div id="perc" class="staff"></div>
-      <div class="note-hint">Flams: q/8 · Open rolls: q/h = 3 slashes · Closed rolls: h/w = “Z” on stem · Triplet 8ths are plain</div>
+      <div class="note-hint">Open = 3 slashes (q,h) · Closed = “Z” on stem (h,w) · Triplet 8ths are plain</div>
     </div>
   </div>
 
@@ -112,14 +112,12 @@
       { label: "Triplet 8ths", duration: "8", count: 12, triplet: true }
     ];
 
-    // Rudiment chances
-    const PROB_FLAM = 0.30;        // q, 8
-    const PROB_OPEN_ROLL = 0.25;   // q, h (3 slashes)
-    const PROB_CLOSED_ROLL = 0.25; // h, w (Z on stem)
+    // Probabilities (used only to choose a measure-wide roll type)
+    const PROB_ANY_ROLL = 0.5;     // chance that a measure will have rolls at all
+    const PROB_OPEN_VS_CLOSED = 0.5; // when both allowed
 
     // Drawing helpers
     function clearDiv(id) { const el = document.getElementById(id); if (el) el.innerHTML = ""; }
-
     function makeStave(divId, clef, width = 620, height = 160) {
       const div = document.getElementById(divId);
       const renderer = new VF.Renderer(div, VF.Renderer.Backends.SVG);
@@ -129,11 +127,9 @@
       stave.addClef(clef).setContext(context).draw();
       return { context, stave, width, height };
     }
-
     function addAccidentalIfNeeded(note, acc) {
       if (acc === "#" || acc === "b") note.addAccidental(0, new VF.Accidental(acc));
     }
-
     function drawSingleWholeKey(divId, clef, letter, acc, oct, width) {
       clearDiv(divId);
       const { context, stave } = makeStave(divId, clef, width);
@@ -174,19 +170,23 @@
         const mods = n.getModifiers ? n.getModifiers() : [];
         const zAnn = mods.find(m => m && m.text === "z");
         if (!zAnn) return;
-        zAnn.setXShift(deltaX - 4);
-        zAnn.setYShift(0);
+        zAnn.setXShift(deltaX - 4); // center on stem
+        zAnn.setYShift(-12);        // lift up so it sits on the stem, not the notehead
       });
     }
 
-    function applyRudimentsToNotes(notes, rhythm, allowFlams, allowOpenRolls, allowClosedRolls) {
-      for (const n of notes) {
-        if (rhythm.triplet) continue;
-        const dur = rhythm.duration;
-        if (allowFlams && (dur === "q" || dur === "8") && chance(PROB_FLAM)) { addFlam(n); continue; }
-        if (allowOpenRolls && (dur === "q" || dur === "h") && chance(PROB_OPEN_ROLL)) { addOpenRoll(n); continue; }
-        if (allowClosedRolls && dur === "h" && chance(PROB_CLOSED_ROLL)) { addClosedRoll(n); continue; }
+    // Measure-wide roll choice (only ONE type per measure)
+    function pickMeasureRollType(allowOpen, allowClosed, rhythm) {
+      const eligibleOpen   = allowOpen   && (rhythm.duration === "q" || rhythm.duration === "h");
+      const eligibleClosed = allowClosed && (rhythm.duration === "h" || rhythm.duration === "w");
+
+      if (!eligibleOpen && !eligibleClosed) return "none";
+      if (Math.random() > PROB_ANY_ROLL) return "none";
+
+      if (eligibleOpen && eligibleClosed) {
+        return (Math.random() < PROB_OPEN_VS_CLOSED) ? "open" : "closed";
       }
+      return eligibleOpen ? "open" : "closed";
     }
 
     function drawPercussion(rhythm, allowFlams, allowOpenRolls, allowClosedRolls, width) {
@@ -197,14 +197,30 @@
       let beams = [];
       let tuplets = [];
 
+      // Decide the single roll type for the whole measure
+      const rollType = pickMeasureRollType(allowOpenRolls, allowClosedRolls, rhythm);
+
       if (rhythm.duration === "w") {
         const n = makePercNote("w");
-        const r = Math.random();
-        if (allowClosedRolls && r < PROB_CLOSED_ROLL) addClosedRoll(n); else
-        if (allowOpenRolls  && r < PROB_CLOSED_ROLL + PROB_OPEN_ROLL) addOpenRoll(n);
+        if (rollType === "closed") addClosedRoll(n);
+        else if (rollType === "open") addOpenRoll(n); // (will show 3 slashes if chosen)
         notes = [n];
       } else {
-        for (let i = 0; i < rhythm.count; i++) notes.push(makePercNote(rhythm.duration));
+        for (let i = 0; i < rhythm.count; i++) {
+          const n = makePercNote(rhythm.duration);
+
+          // Flams allowed on q/8; flam skips roll on that note
+          const canFlam = (rhythm.duration === "q" || rhythm.duration === "8");
+          if (allowFlams && canFlam && chance(0.3)) {
+            addFlam(n);
+          } else {
+            // Apply ONLY the chosen roll type (if this duration is eligible)
+            if (rollType === "open" && (rhythm.duration === "q" || rhythm.duration === "h")) addOpenRoll(n);
+            if (rollType === "closed" && (rhythm.duration === "h")) addClosedRoll(n);
+          }
+
+          notes.push(n);
+        }
 
         if (rhythm.triplet) {
           for (let i = 0; i < notes.length; i += 3) {
@@ -215,7 +231,6 @@
         if (rhythm.duration === "8" || rhythm.duration === "16") {
           beams = VF.Beam.generateBeams(notes);
         }
-        applyRudimentsToNotes(notes, rhythm, allowFlams, allowOpenRolls, allowClosedRolls);
       }
 
       const voice = new VF.Voice({ num_beats: 4, beat_value: 4 });
@@ -223,7 +238,7 @@
       voice.addTickables(notes);
 
       new VF.Formatter().joinVoices([voice]).format([voice], width - 60);
-      positionClosedRollZOnStem(notes);   // << make “Z” sit on stem
+      positionClosedRollZOnStem(notes);   // position “Z” on stem after formatting
       voice.draw(context, stave);
 
       beams.forEach(b => b.setContext(context).draw());
