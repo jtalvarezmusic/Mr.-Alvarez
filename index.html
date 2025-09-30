@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Band Note & Rhythm Randomizer — MS Rudiments (Toggles + Percussion Only)</title>
+  <!-- VexFlow v3 UMD so window.Vex and Vex.Flow exist -->
+  <script src="https://unpkg.com/vexflow@3.0.9/releases/vexflow-min.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; text-align: center; background: #f9f9f9; }
+    h1 { margin-top: 20px; }
+    .controls { display: flex; gap: 16px; justify-content: center; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+    .controls label { user-select: none; }
+    .row { display: flex; gap: 40px; justify-content: center; flex-wrap: wrap; margin-top: 16px; }
+    .label { font-weight: 600; margin: 6px 0 0; }
+    .staff { width: 640px; background: #fff; border-radius: 12px; box-shadow: 0 2px 6px rgba(0,0,0,.2); padding: 10px; }
+    .staff.wide { width: 920px; } /* used in percussion-only mode */
+    button { margin: 16px 6px 24px; padding: 10px 20px; font-size: 18px; border: none; border-radius: 10px; background: #4caf50; color: #fff; cursor: pointer; }
+    button:hover { background: #45a049; }
+    .note-hint { font-size: 12px; color: #666; margin-top: -8px; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <h1>Band Note & Rhythm Randomizer</h1>
+
+  <div class="controls">
+    <label><input type="checkbox" id="allowFlams" checked /> Allow Flams (q, 8)</label>
+    <label><input type="checkbox" id="allowOpenRolls" checked /> Allow Open Rolls (q, h)</label>
+    <label><input type="checkbox" id="allowClosedRolls" checked /> Allow Closed Rolls (h, w)</label>
+    <label><input type="checkbox" id="percOnly" /> Percussion only</label>
+    <button id="shuffleBtn" onclick="drawRandom()">Shuffle (or press Space)</button>
+  </div>
+
+  <div class="row" id="windsRow">
+    <div>
+      <div class="label">Treble Clef</div>
+      <div id="treble" class="staff"></div>
+    </div>
+    <div>
+      <div class="label">Bass Clef</div>
+      <div id="bass" class="staff"></div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <div class="label">Percussion</div>
+      <div id="perc" class="staff"></div>
+      <div class="note-hint">Flams: q/8 · Open rolls: q/h · Closed rolls: h/w · Triplet 8ths are plain</div>
+    </div>
+  </div>
+
+  <script>
+    const VF = Vex.Flow; // v3 API
+
+    // ---------- Utilities ----------
+    function randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+    function chance(p) { return Math.random() < p; }
+
+    // Accidentals allowed per letter (naturals + C#, F#, G#, Bb, Eb, Db)
+    const allowedAccidentals = {
+      g: ["", "#"], a: [""], b: ["", "b"], c: ["", "#"], d: ["", "b"], e: ["", "b"], f: ["", "#"]
+    };
+
+    // MIDI helpers for range checks
+    const NAT_MIDI = { c:0, d:2, e:4, f:5, g:7, a:9, b:11 };
+    function midiFrom(letter, acc, oct) {
+      let base = NAT_MIDI[letter];
+      if (acc === "#") base += 1;
+      if (acc === "b") base -= 1;
+      return 12 * (oct + 1) + base;
+    }
+
+    // Treble range: G3 (55) to G5 (79)
+    const trebleKeys = [];
+    for (let oct = 3; oct <= 5; oct++) {
+      for (const letter of ["g","a","b","c","d","e","f"]) {
+        for (const acc of allowedAccidentals[letter]) {
+          const m = midiFrom(letter, acc, oct);
+          if (m >= 55 && m <= 79) trebleKeys.push({ letter, acc, oct });
+        }
+      }
+    }
+
+    // Bass octave choice (A2–C4) by letter (accidental added separately)
+    const bassOctKeyByLetter = {
+      g: "g/2", a: "a/2", b: "b/2", c: "c/3", d: "d/3", e: "e/3", f: "f/3"
+    };
+
+    // Rhythms (single value repeats to fill 4/4)
+    const rhythms = [
+      { label: "Whole",   duration: "w",  count: 1 },
+      { label: "Half",    duration: "h",  count: 2 },
+      { label: "Quarter", duration: "q",  count: 4 },
+      { label: "Eighth",  duration: "8",  count: 8 },
+      { label: "16th",    duration: "16", count: 16 },
+      { label: "Triplet 8ths", duration: "8", count: 12, triplet: true } // left plain by rule
+    ];
+
+    // Rudiment chances (applied only if toggles allow)
+    const PROB_FLAM = 0.30;        // quarters, eighths
+    const PROB_OPEN_ROLL = 0.25;   // quarters, halves
+    const PROB_CLOSED_ROLL = 0.25; // halves, wholes
+
+    // ---------- Drawing helpers ----------
+    function clearDiv(id) {
+      const el = document.getElementById(id);
+      if (el) el.innerHTML = "";
+    }
+
+    function makeStave(divId, clef, width = 620, height = 160) {
+      const div = document.getElementById(divId);
+      const renderer = new VF.Renderer(div, VF.Renderer.Backends.SVG);
+      renderer.resize(width, height);
+      const context = renderer.getContext();
+      const stave = new VF.Stave(10, 40, width - 20);
+      stave.addClef(clef).setContext(context).draw();
+      return { renderer, context, stave, width, height };
+    }
+
+    function addAccidentalIfNeeded(note, acc) {
+      if (acc === "#" || acc === "b") note.addAccidental(0, new VF.Accidental(acc));
+    }
+
+    function drawSingleWhole(divId, clef, letter, acc, oct, width) {
+      clearDiv(divId);
+      const { context, stave } = makeStave(divId, clef, width);
+      const key = `${letter}/${oct}`;
+      const note = new VF.StaveNote({ clef, keys: [key], duration: "w" });
+      addAccidentalIfNeeded(note, acc);
+      const voice = new VF.Voice({ num_beats: 4, beat_value: 4 });
+      voice.setStrict(false);
+      voice.addTickables([note]);
+      new VF.Formatter().joinVoices([voice]).format([voice], width - 60);
+      voice.draw(context, stave);
+    }
+
+    // ---------- Percussion helpers ----------
+    function makePercNote(duration) {
+      return new VF.StaveNote({ clef: "percussion", keys: ["b/4"], duration, stem_direction: 1 });
+    }
+    function addFlam(note) {
+      const g = new VF.GraceNote({ keys: ["b/4"], duration: "8", slash: false, stem_direction: 1 });
+      const gg = new VF.GraceNoteGroup([g], { slur: true });
+      note.addModifier(0, gg);
+    }
+    function addOpenRoll(note) { note.addModifier(0, new VF.Tremolo(2)); }   // 2 slashes
+    function addClosedRoll(note) { note.addModifier(0, new VF.Tremolo(3)); } // 3 slashes
+
+    function applyRudimentsToNotes(notes, rhythm, allowFlams, allowOpenRolls, allowClosedRolls) {
+      for (const n of notes) {
+        if (rhythm.triplet) continue; // triplet 8ths are plain
+        const dur = rhythm.duration;
+
+        // Flams: quarters & eighths
+        if (allowFlams && (dur === "q" || dur === "8") && chance(PROB_FLAM)) {
+          addFlam(n);
+          continue; // flam chosen → skip roll
+        }
+        // Open rolls: quarters & halves
+        if (allowOpenRolls && (dur === "q" || dur === "h") && chance(PROB_OPEN_ROLL)) {
+          addOpenRoll(n);
+          continue;
+        }
+        // Closed rolls: halves
+        if (allowClosedRolls && dur === "h" && chance(PROB_CLOSED_ROLL)) {
+          addClosedRoll(n);
+          continue;
+        }
+        // 16ths kept plain; whole handled separately
+      }
+    }
+
+    function drawPercussion(rhythm, allowFlams, allowOpenRolls, allowClosedRolls, width) {
+      clearDiv("perc");
+      const { context, stave } = makeStave("perc", "percussion", width);
+
+      let notes = [];
+      let beams = [];
+      let tuplets = [];
+      let tie = null;
+
+      if (rhythm.duration === "w") {
+        // Whole → if closed rolls allowed, render as two tied halves with slashes
+        const n1 = makePercNote("h");
+        const n2 = makePercNote("h");
+        if (allowClosedRolls && chance(PROB_CLOSED_ROLL)) { addClosedRoll(n1); addClosedRoll(n2); }
+        notes = [n1, n2];
+        tie = new VF.StaveTie({ first_note: n1, last_note: n2, first_indices: [0], last_indices: [0] });
+      } else {
+        // Build repeated notes
+        for (let i = 0; i < rhythm.count; i++) notes.push(makePercNote(rhythm.duration));
+
+        // Tuplets for triplet 8ths
+        if (rhythm.triplet) {
+          for (let i = 0; i < notes.length; i += 3) {
+            const group = notes.slice(i, i + 3);
+            if (group.length === 3) tuplets.push(new VF.Tuplet(group, { num_notes: 3, notes_occupied: 2 }));
+          }
+        }
+
+        // Beams for 8ths/16ths
+        if (rhythm.duration === "8" || rhythm.duration === "16") {
+          beams = VF.Beam.generateBeams(notes);
+        }
+
+        // Apply rudiments per rules & toggles
+        applyRudimentsToNotes(notes, rhythm, allowFlams, allowOpenRolls, allowClosedRolls);
+      }
+
+      const voice = new VF.Voice({ num_beats: 4, beat_value: 4 });
+      voice.setStrict(false);
+      voice.addTickables(notes);
+
+      new VF.Formatter().joinVoices([voice]).format([voice], width - 60);
+      voice.draw(context, stave);
+
+      beams.forEach(b => b.setContext(context).draw());
+      tuplets.forEach(t => t.setContext(context).draw());
+      if (tie) tie.setContext(context).draw();
+    }
+
+    // ---------- Main randomizer ----------
+    function drawRandom() {
+      const percOnly = document.getElementById("percOnly").checked;
+
+      // Toggle UI + widths
+      const windsRow = document.getElementById("windsRow");
+      windsRow.classList.toggle("hidden", percOnly);
+      document.getElementById("perc").classList.toggle("wide", percOnly);
+
+      const windWidth = 620;
+      const percWidth = percOnly ? 920 : 660;
+
+      // Treble/Bass (hidden if perc-only)
+      if (!percOnly) {
+        const choice = trebleKeys[randInt(0, trebleKeys.length - 1)];
+        const { letter, acc, oct } = choice;
+
+        drawSingleWhole("treble", "treble", letter, acc, oct, windWidth);
+
+        clearDiv("bass");
+        const { context, stave } = makeStave("bass", "bass", windWidth);
+        const bassBaseKey = bassOctKeyByLetter[letter] || "c/3";
+        const bassNote = new VF.StaveNote({ clef: "bass", keys: [bassBaseKey], duration: "w" });
+        if (acc === "#" || acc === "b") bassNote.addAccidental(0, new VF.Accidental(acc));
+        const voiceB = new VF.Voice({ num_beats: 4, beat_value: 4 });
+        voiceB.setStrict(false);
+        voiceB.addTickables([bassNote]);
+        new VF.Formatter().joinVoices([voiceB]).format([voiceB], windWidth - 60);
+        voiceB.draw(context, stave);
+      } else {
+        clearDiv("treble"); clearDiv("bass");
+      }
+
+      // Rudiment toggles
+      const allowFlams = document.getElementById("allowFlams").checked;
+      const allowOpenRolls = document.getElementById("allowOpenRolls").checked;
+      const allowClosedRolls = document.getElementById("allowClosedRolls").checked;
+
+      // Percussion
+      const rhythm = rhythms[randInt(0, rhythms.length - 1)];
+      drawPercussion(rhythm, allowFlams, allowOpenRolls, allowClosedRolls, percWidth);
+    }
+
+    // Init + controls
+    drawRandom();
+    document.addEventListener("keydown", (ev) => {
+      if (ev.code === "Space") { ev.preventDefault(); drawRandom(); }
+    });
+    document.getElementById("shuffleBtn").addEventListener("click", drawRandom);
+    document.getElementById("percOnly").addEventListener("change", drawRandom);
+    document.getElementById("allowFlams").addEventListener("change", drawRandom);
+    document.getElementById("allowOpenRolls").addEventListener("change", drawRandom);
+    document.getElementById("allowClosedRolls").addEventListener("change", drawRandom);
+  </script>
+</body>
+</html>
