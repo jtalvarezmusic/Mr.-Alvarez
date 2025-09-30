@@ -51,7 +51,7 @@
     <div>
       <div class="label">Percussion</div>
       <div id="perc" class="staff"></div>
-      <div class="note-hint">No triplets · Rolls only on half/whole · Open=3 slashes · Closed=“Z” on stem · Flams on q/8</div>
+      <div class="note-hint">No triplets · Rolls only on half/whole · Only one roll type per measure · Open=3 slashes · Closed=“Z” on stem</div>
     </div>
   </div>
 
@@ -106,9 +106,9 @@
       { label: "16th",    duration: "16", count: 16 }
     ];
 
-    const PROB_OPEN_ROLL = 0.25;   // open = 3 slashes
-    const PROB_CLOSED_ROLL = 0.25; // closed = “Z” on stem
-    const PROB_FLAM = 0.30;        // flams on q/8
+    // Measure-wide roll selection
+    const PROB_ANY_ROLL = 0.6;        // beginner: slightly more likely to show a roll
+    const PROB_OPEN_VS_CLOSED = 0.5;  // when both allowed
 
     // Draw helpers
     function clearDiv(id){ const el = document.getElementById(id); if (el) el.innerHTML = ""; }
@@ -162,8 +162,22 @@
         const zAnn = mods.find(m => m && m.text === "z");
         if (!zAnn) return;
         zAnn.setXShift(deltaX - 4);
-        zAnn.setYShift(0);
+        zAnn.setYShift(-12); // lift up onto the stem
       });
+    }
+
+    // Only one roll type per measure (beginner: rolls only on h/w)
+    function pickMeasureRollType(allowOpen, allowClosed, rhythm) {
+      const eligibleOpen   = allowOpen   && (rhythm.duration === "h" || rhythm.duration === "w");
+      const eligibleClosed = allowClosed && (rhythm.duration === "h" || rhythm.duration === "w");
+
+      if (!eligibleOpen && !eligibleClosed) return "none";
+      if (Math.random() > PROB_ANY_ROLL) return "none";
+
+      if (eligibleOpen && eligibleClosed) {
+        return (Math.random() < PROB_OPEN_VS_CLOSED) ? "open" : "closed";
+      }
+      return eligibleOpen ? "open" : "closed";
     }
 
     // Percussion drawing
@@ -172,34 +186,36 @@
       const { ctx, stave, width } = makeStave("perc","percussion");
       let notes = [], beams=[];
 
+      const rollType = pickMeasureRollType(allowOpen, allowClosed, rhythm);
+
       if (rhythm.duration === "w") {
         const n = makePercNote("w");
-        const r = Math.random();
-        if (allowClosed && r < PROB_CLOSED_ROLL) addClosedRoll(n);
-        else if (allowOpen && r < PROB_CLOSED_ROLL + PROB_OPEN_ROLL) addOpenRoll(n);
+        if (rollType === "open") addOpenRoll(n);
+        if (rollType === "closed") addClosedRoll(n);
         notes = [n];
+      } else if (rhythm.duration === "h") {
+        for (let i=0;i<2;i++) {
+          const n = makePercNote("h");
+          if (rollType === "open") addOpenRoll(n);
+          if (rollType === "closed") addClosedRoll(n);
+          notes.push(n);
+        }
       } else {
+        // q/8/16: rolls not used in beginner; flams allowed on q/8 only
         for (let i=0;i<rhythm.count;i++) {
           const n = makePercNote(rhythm.duration);
-          if (allowFlams && (rhythm.duration === "q" || rhythm.duration === "8") && Math.random() < PROB_FLAM) {
+          if (allowFlams && (rhythm.duration === "q" || rhythm.duration === "8") && Math.random() < 0.3) {
             addFlam(n);
-          }
-          if (rhythm.duration === "h") {
-            const r = Math.random();
-            if (allowClosed && r < PROB_CLOSED_ROLL) addClosedRoll(n);
-            else if (allowOpen && r < PROB_CLOSED_ROLL + PROB_OPEN_ROLL) addOpenRoll(n);
           }
           notes.push(n);
         }
-        if (rhythm.duration==="8" || rhythm.duration==="16") {
-          beams = VF.Beam.generateBeams(notes);
-        }
+        if (rhythm.duration==="8" || rhythm.duration==="16") beams = VF.Beam.generateBeams(notes);
       }
 
       const v = new VF.Voice({ num_beats:4, beat_value:4 }); v.setStrict(false);
       v.addTickables(notes);
       new VF.Formatter().joinVoices([v]).format([v], width-60);
-      positionClosedRollZOnStem(notes);   // << put “Z” on stem
+      positionClosedRollZOnStem(notes);   // place “Z” on stem after layout
       v.draw(ctx, stave);
       beams.forEach(b=>b.setContext(ctx).draw());
     }
@@ -210,9 +226,6 @@
       const allowFlams = document.getElementById("allowFlams").checked;
       const allowOpen   = document.getElementById("allowOpenRolls").checked;
       const allowClosed = document.getElementById("allowClosedRolls").checked;
-
-      const TRUMPET_MIN = midiFrom("c","",4), TRUMPET_MAX = midiFrom("c","",5);
-      const ALTO_MIN    = midiFrom("g","",4), ALTO_MAX    = midiFrom("g","",5);
 
       // Pick one concert pitch from Bb scale pool
       const concertMidi = CONCERT_SCALE_POOL[randInt(0, CONCERT_SCALE_POOL.length-1)];
