@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Band Note & Rhythm Randomizer — MS Rudiments (Toggles + Percussion Only)</title>
+  <title>Band Note & Rhythm Randomizer — MS Rudiments + Bb Treble Toggle</title>
   <!-- VexFlow v3 UMD so window.Vex and Vex.Flow exist -->
   <script src="https://unpkg.com/vexflow@3.0.9/releases/vexflow-min.js"></script>
   <style>
@@ -24,6 +24,7 @@
   <h1>Band Note & Rhythm Randomizer</h1>
 
   <div class="controls">
+    <label><input type="checkbox" id="bbTreble" /> Treble is Bb (Trumpet/Clarinet)</label>
     <label><input type="checkbox" id="allowFlams" checked /> Allow Flams (q, 8)</label>
     <label><input type="checkbox" id="allowOpenRolls" checked /> Allow Open Rolls (q, h)</label>
     <label><input type="checkbox" id="allowClosedRolls" checked /> Allow Closed Rolls (h, w)</label>
@@ -57,12 +58,12 @@
     function randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
     function chance(p) { return Math.random() < p; }
 
-    // Accidentals allowed per letter (naturals + C#, F#, G#, Bb, Eb, Db)
-    const allowedAccidentals = {
+    // Accidentals (naturals + C#, F#, G#, Bb, Eb, Db)
+    let allowedAccidentals = {
       g: ["", "#"], a: [""], b: ["", "b"], c: ["", "#"], d: ["", "b"], e: ["", "b"], f: ["", "#"]
     };
 
-    // MIDI helpers for range checks
+    // MIDI helpers
     const NAT_MIDI = { c:0, d:2, e:4, f:5, g:7, a:9, b:11 };
     function midiFrom(letter, acc, oct) {
       let base = NAT_MIDI[letter];
@@ -70,24 +71,52 @@
       if (acc === "b") base -= 1;
       return 12 * (oct + 1) + base;
     }
+    function midiToKeyPreferClass(midi) {
+      // Convert MIDI -> {letter, acc, oct} using preferences that match your allowed set
+      const pc = ((midi % 12) + 12) % 12;
+      const oct = Math.floor(midi / 12) - 1;
 
-    // Treble range: G3 (55) to G5 (79)
-    const trebleKeys = [];
+      // Preferred spellings (aim to match allowed set)
+      // 0 C, 1 C#/Db, 2 D, 3 Eb, 4 E, 5 F, 6 F#, 7 G, 8 G#, 9 A, 10 Bb, 11 B
+      const pref = {
+        0: { letter:"c", acc:"" },
+        1: { letter:"c", acc:"#"},      // prefer C# over Db (both in set)
+        2: { letter:"d", acc:"" },
+        3: { letter:"e", acc:"b"},      // prefer Eb
+        4: { letter:"e", acc:"" },
+        5: { letter:"f", acc:"" },
+        6: { letter:"f", acc:"#"},      // F#
+        7: { letter:"g", acc:"" },
+        8: { letter:"g", acc:"#"},      // G#
+        9: { letter:"a", acc:"" },
+        10:{ letter:"b", acc:"b"},      // Bb
+        11:{ letter:"b", acc:"" }
+      };
+      const { letter, acc } = pref[pc];
+      return { letter, acc, oct };
+    }
+
+    function clampToBassRange(midi) {
+      // Clamp concert MIDI into A2..C4 (inclusive bounds)
+      const A2 = 12*(2+1)+9;  // 45
+      const C4 = 12*(4+1)+0;  // 60
+      while (midi < A2) midi += 12;
+      while (midi > C4) midi -= 12;
+      return midi;
+    }
+
+    // Build treble pool G3..G5 (written notes)
+    const treblePool = [];
     for (let oct = 3; oct <= 5; oct++) {
       for (const letter of ["g","a","b","c","d","e","f"]) {
         for (const acc of allowedAccidentals[letter]) {
           const m = midiFrom(letter, acc, oct);
-          if (m >= 55 && m <= 79) trebleKeys.push({ letter, acc, oct });
+          if (m >= 55 && m <= 79) treblePool.push({ letter, acc, oct, midi: m });
         }
       }
     }
 
-    // Bass octave choice (A2–C4) by letter (accidental added separately)
-    const bassOctKeyByLetter = {
-      g: "g/2", a: "a/2", b: "b/2", c: "c/3", d: "d/3", e: "e/3", f: "f/3"
-    };
-
-    // Rhythms (single value repeats to fill 4/4)
+    // Percussion rhythms (single value repeats to fill 4/4)
     const rhythms = [
       { label: "Whole",   duration: "w",  count: 1 },
       { label: "Half",    duration: "h",  count: 2 },
@@ -97,16 +126,13 @@
       { label: "Triplet 8ths", duration: "8", count: 12, triplet: true } // left plain by rule
     ];
 
-    // Rudiment chances (applied only if toggles allow)
+    // Rudiment chances
     const PROB_FLAM = 0.30;        // quarters, eighths
     const PROB_OPEN_ROLL = 0.25;   // quarters, halves
     const PROB_CLOSED_ROLL = 0.25; // halves, wholes
 
     // ---------- Drawing helpers ----------
-    function clearDiv(id) {
-      const el = document.getElementById(id);
-      if (el) el.innerHTML = "";
-    }
+    function clearDiv(id) { const el = document.getElementById(id); if (el) el.innerHTML = ""; }
 
     function makeStave(divId, clef, width = 620, height = 160) {
       const div = document.getElementById(divId);
@@ -122,7 +148,7 @@
       if (acc === "#" || acc === "b") note.addAccidental(0, new VF.Accidental(acc));
     }
 
-    function drawSingleWhole(divId, clef, letter, acc, oct, width) {
+    function drawSingleWholeKey(divId, clef, letter, acc, oct, width) {
       clearDiv(divId);
       const { context, stave } = makeStave(divId, clef, width);
       const key = `${letter}/${oct}`;
@@ -220,9 +246,10 @@
       if (tie) tie.setContext(context).draw();
     }
 
-    // ---------- Main randomizer ----------
+    // ---------- Main randomizer with Bb-treble option ----------
     function drawRandom() {
       const percOnly = document.getElementById("percOnly").checked;
+      const bbTreble = document.getElementById("bbTreble").checked;
 
       // Toggle UI + widths
       const windsRow = document.getElementById("windsRow");
@@ -232,23 +259,32 @@
       const windWidth = 620;
       const percWidth = percOnly ? 920 : 660;
 
-      // Treble/Bass (hidden if perc-only)
+      // Choose a written treble note from pool (G3–G5, with your accidental set)
+      const choice = treblePool[randInt(0, treblePool.length - 1)];
+      const { letter, acc, oct, midi: writtenMidi } = choice;
+
+      // Determine concert MIDI:
+      // - If Bb treble: concert = written - 2 semitones
+      // - Else: concert = written (no transposition)
+      let concertMidi = bbTreble ? (writtenMidi - 2) : writtenMidi;
+
+      // For bass display, clamp concert MIDI into A2..C4 by octave shifts
+      const bassMidi = clampToBassRange(concertMidi);
+      const bassKey = midiToKeyPreferClass(bassMidi);
+
       if (!percOnly) {
-        const choice = trebleKeys[randInt(0, trebleKeys.length - 1)];
-        const { letter, acc, oct } = choice;
+        // Treble display:
+        // - If Bb treble ON -> show the WRITTEN (letter/acc/oct) we picked
+        // - If OFF -> show CONCERT (convert concertMidi back to treble key)
+        if (bbTreble) {
+          drawSingleWholeKey("treble", "treble", letter, acc, oct, windWidth);
+        } else {
+          const tKey = midiToKeyPreferClass(concertMidi);
+          drawSingleWholeKey("treble", "treble", tKey.letter, tKey.acc, tKey.oct, windWidth);
+        }
 
-        drawSingleWhole("treble", "treble", letter, acc, oct, windWidth);
-
-        clearDiv("bass");
-        const { context, stave } = makeStave("bass", "bass", windWidth);
-        const bassBaseKey = bassOctKeyByLetter[letter] || "c/3";
-        const bassNote = new VF.StaveNote({ clef: "bass", keys: [bassBaseKey], duration: "w" });
-        if (acc === "#" || acc === "b") bassNote.addAccidental(0, new VF.Accidental(acc));
-        const voiceB = new VF.Voice({ num_beats: 4, beat_value: 4 });
-        voiceB.setStrict(false);
-        voiceB.addTickables([bassNote]);
-        new VF.Formatter().joinVoices([voiceB]).format([voiceB], windWidth - 60);
-        voiceB.draw(context, stave);
+        // Bass (always show concert, clamped to A2–C4)
+        drawSingleWholeKey("bass", "bass", bassKey.letter, bassKey.acc, bassKey.oct, windWidth);
       } else {
         clearDiv("treble"); clearDiv("bass");
       }
@@ -269,10 +305,9 @@
       if (ev.code === "Space") { ev.preventDefault(); drawRandom(); }
     });
     document.getElementById("shuffleBtn").addEventListener("click", drawRandom);
-    document.getElementById("percOnly").addEventListener("change", drawRandom);
-    document.getElementById("allowFlams").addEventListener("change", drawRandom);
-    document.getElementById("allowOpenRolls").addEventListener("change", drawRandom);
-    document.getElementById("allowClosedRolls").addEventListener("change", drawRandom);
+    ["percOnly","allowFlams","allowOpenRolls","allowClosedRolls","bbTreble"].forEach(id => {
+      document.getElementById(id).addEventListener("change", drawRandom);
+    });
   </script>
 </body>
 </html>
